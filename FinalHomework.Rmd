@@ -1,0 +1,767 @@
+---
+title: "Bank Data Analysis"
+author:
+  - Mehmet Kadri Gofralılar
+  - Hasan Ali Özkan
+date: "1/6/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+setwd("/Users/hasanaliozkan/Desktop/Desktop/")
+colFmt <- function(x,color) {
+  ret <- paste("<font color='",color,"'>",x,"</font>",sep="")
+  return(ret)
+}
+```
+
+
+
+## 1) Getting Started
+The data is related with direct marketing campaigns (phone calls) of a Portuguese banking institution. In order to use this data, we import libraries that we need to use. Then, we should assign our [dataset](http://archive.ics.uci.edu/ml/datasets/Bank+Marketing#) to a variable. After that, we should check the structure and first few rows of the dataset to have an idea of what we're dealing with.
+```{r imports, message=FALSE}
+library(tidyverse)
+library(cowplot)
+library(reshape2)
+library(caret)
+library(Amelia)
+library(corrplot)
+library(mice)
+library(VIM)
+library(ROSE)
+library(smotefamily)
+library(party)
+library(rpart.plot)
+library(knitr)
+library(ggfortify)
+library(factoextra)
+library(NbClust)
+
+data <- read.csv("bank-additional-full.csv",sep=";")
+kable(t(head(data)), "markdown")
+kable(t(summary(data)), "markdown")
+
+
+
+```
+
+## 2) Exploratory Data Analysis
+
+ We can say that the columns that are not numeric are the columns that we should factorize, since they're categorical variables.
+ Also missing values look like they're empty strings, so they need to be changed into NA values as well.
+
+```{r data}
+data[data=="unknown"]<-NA
+
+data$job <- as.factor(data$job)
+data$marital <- as.factor(data$marital)
+data$education <- as.factor(data$education)
+data$default <- as.factor(data$default)
+data$housing <- as.factor(data$housing)
+data$loan <- as.factor(data$loan)
+data$contact <- as.factor(data$contact)
+data$month <- as.factor(data$month)
+data$day_of_week <- as.factor(data$day_of_week)
+data$poutcome <- as.factor(data$poutcome)
+data$term_deposit <- ifelse(data$term_deposit=="yes",1,0)
+data$term_deposit <- as.factor(data$term_deposit)
+```
+
+Let's check the data structure again.
+```{r summary}
+kable(t(summary(data)), "markdown")
+```
+
+
+This looks better for further processes.
+
+Next, we should check the density of missing values between columns.
+```{r missmap}
+missmap(data)
+```
+
+
+It seems there are missing values in columns "`r colFmt("default, loan, job",'red')`". In further steps, these missing values will be filled by using various missing data imputation methods. For example, for binomial variables, we will use logistic regression method. Although for polynomial variables, we will use polynomial regression method.
+
+It's better to see some plots in order to comment on the dataset in a more detailed way.
+
+## 3) Visualized Data
+```{r job_term_dep_plot}
+ggplot(data) +
+  geom_bar(mapping=aes(x = job, fill= term_deposit),position = "dodge")+
+  labs(
+    x = "Jobs",
+    y = "Counts",
+    title = "Term Deposit Information by People's Jobs")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+```
+
+In this graph, it's obvious that admin, blue-collar and technician are the most called job titles by a Portuguese banking institution. It's also shown that the least called job title is student. It makes sense, since students are the least trustworthy ones among people who have other jobs due to them having no stable income. 
+```{r job_term_dep_plot_false, figures-side, fig.show="hold", out.width="50%"}
+
+term_deposit_by_job <- data.frame("job_name" = unique(data[c("job")]), "no_dep_count" = 0, "dep_count" = 0)
+
+for(row in 1:nrow(term_deposit_by_job)){
+  current_job_name <- as.character(term_deposit_by_job$job[row])
+  term_deposit_by_job[row, ][2] <- length(which(filter(data,job==current_job_name)$term_deposit == as.integer(0)))
+  term_deposit_by_job[row, ][3] <- length(which(filter(data,job==current_job_name)$term_deposit == as.integer(1)))
+  
+}
+
+ggplot(term_deposit_by_job, aes(x = reorder(term_deposit_by_job$job, no_dep_count), y = no_dep_count, fill=term_deposit_by_job$job)) +
+  geom_bar(stat="identity")+ theme(legend.position="none")+
+  labs(
+    x = "Jobs",
+    y = "Counts",
+    title = "People Who Haven't Subscribed a Term Deposit by Their Jobs")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+
+ggplot(term_deposit_by_job, aes(x = reorder(term_deposit_by_job$job, dep_count), y = dep_count, fill=term_deposit_by_job$job)) +
+  geom_bar(stat="identity")+ theme(legend.position="none")+
+  labs(
+    x = "Jobs",
+    y = "Counts",
+    title = "People Who Have Subscribed a Term Deposit by Their Jobs")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+```
+
+
+
+In this graphs, we can see that almost 1/5 of admins subscribe term deposits, which is a higher rate when compared to others. Therefore, it's advised to the bank that some campaigns should be available only for other job titles, since they also represent a big percentage of the possible customers, which is more profitable.
+
+```{r marital_term_dep_plot}
+ggplot(data) +
+  geom_bar(mapping=aes(x = marital, fill= term_deposit),position = "dodge")+
+  labs(
+    x = "Marital Status",
+    y = "Counts",
+    title = "Term Deposit Information by People's Marital Status")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+```
+
+
+We can see that married people are the ones who are called most by the bank.
+```{r marital_term_dep_plot_false, figures-side, fig.show="hold", out.width="50%"}
+
+term_deposit_by_marital <- data.frame("marital" = unique(data[c("marital")]), "no_dep_count" = 0, "dep_count" = 0)
+
+for(row in 1:nrow(term_deposit_by_marital)){
+  current_marital <- as.character(term_deposit_by_marital$marital[row])
+  term_deposit_by_marital[row, ][2] <- length(which(filter(data,marital==current_marital)$term_deposit == as.integer(0)))
+  term_deposit_by_marital[row, ][3] <- length(which(filter(data,marital==current_marital)$term_deposit == as.integer(1)))
+  
+}
+
+ggplot(term_deposit_by_marital, aes(x = reorder(term_deposit_by_marital$marital, no_dep_count), y = no_dep_count, fill=term_deposit_by_marital$marital)) +
+  geom_bar(stat="identity")+ theme(legend.position="none")+
+  labs(
+    x = "Marital Status",
+    y = "Counts",
+    title = "People Who Haven't Subscribed a Term Deposit by Their Marital Status")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+
+ggplot(term_deposit_by_marital, aes(x = reorder(term_deposit_by_marital$marital, dep_count), y = dep_count, fill=term_deposit_by_marital$marital)) +
+  geom_bar(stat="identity")+ theme(legend.position="none")+
+  labs(
+    x = "Marital Status",
+    y = "Counts",
+    title = "People Who Have Subscribed a Term Deposit by Their Marital Status")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+```
+
+
+It's visible that while divorced and married people preserve their percentages of having subscribed to a term deposit or not, single people tend to subscribe a term deposit compared to others in terms of percentage.
+
+```{r education_term_dep_plot}
+ggplot(data) +
+  geom_bar(mapping=aes(x = education, fill= term_deposit),position = "dodge")+
+  labs(
+    x = "Education Level",
+    y = "Counts",
+    title = "Term Deposit Information by People's Education Level")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+```
+
+People who have university degrees are called most among others. Illiterate people are the ones who almost hasn't been called. They have a negligible count, therefore it's not necessary to conduct a campaign based on them.
+
+```{r education_term_dep_plot_false, figures-side, fig.show="hold", out.width="50%"}
+
+term_deposit_by_education <- data.frame("education" = unique(data[c("education")]), "no_dep_count" = 0, "dep_count" = 0)
+
+for(row in 1:nrow(term_deposit_by_education)){
+  current_education <- as.character(term_deposit_by_education$education[row])
+  term_deposit_by_education[row, ][2] <- length(which(filter(data,education==current_education)$term_deposit == as.integer(0)))
+  term_deposit_by_education[row, ][3] <- length(which(filter(data,education==current_education)$term_deposit == as.integer(1)))
+  
+}
+
+ggplot(term_deposit_by_education, aes(x = reorder(term_deposit_by_education$education, no_dep_count), y = no_dep_count, fill=term_deposit_by_education$education)) +
+  geom_bar(stat="identity")+ theme(legend.position="none")+
+  labs(
+    x = "Education Level",
+    y = "Counts",
+    title = "People Who Haven't Subscribed a Term Deposit by Their Education Level")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+
+ggplot(term_deposit_by_education, aes(x = reorder(term_deposit_by_education$education, dep_count), y = dep_count, fill=term_deposit_by_education$education)) +
+  geom_bar(stat="identity")+ theme(legend.position="none")+
+  labs(
+    x = "Education Level",
+    y = "Counts",
+    title = "People Who Have Subscribed a Term Deposit by Their Education Level")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+```
+
+```{r month_term_dep_plot}
+ggplot(data) +
+  geom_bar(mapping=aes(x = month, fill= term_deposit),position = "dodge")+
+  labs(
+    x = "Months",
+    y = "Counts",
+    title = "Term Deposit Information by Months")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+```
+
+First detail to notice in this graph is, there's a lot of people who are called in May. But, they have a lesser tendency to subscribe a term deposit. When we look at March, we can say that calls are paying off. More than half of the people that are called in March subscribe a term deposit.
+
+```{r month_term_dep_plot_false, figures-side, fig.show="hold", out.width="50%"}
+
+term_deposit_by_month <- data.frame("month" = unique(data[c("month")]), "no_dep_count" = 0, "dep_count" = 0)
+
+for(row in 1:nrow(term_deposit_by_month)){
+  current_month <- as.character(term_deposit_by_month$month[row])
+  term_deposit_by_month[row, ][2] <- length(which(filter(data,month==current_month)$term_deposit == as.integer(0)))
+  term_deposit_by_month[row, ][3] <- length(which(filter(data,month==current_month)$term_deposit == as.integer(1)))
+  
+}
+
+ggplot(term_deposit_by_month, aes(x = reorder(term_deposit_by_month$month, no_dep_count), y = no_dep_count, fill=term_deposit_by_month$month)) +
+  geom_bar(stat="identity")+ theme(legend.position="none")+
+  labs(
+    x = "Months",
+    y = "Counts",
+    title = "People Who Haven't Subscribed a Term Deposit by Months")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+
+ggplot(term_deposit_by_month, aes(x = reorder(term_deposit_by_month$month, dep_count), y = dep_count, fill=term_deposit_by_month$month)) +
+  geom_bar(stat="identity")+ theme(legend.position="none")+
+  labs(
+    x = "Months",
+    y = "Counts",
+    title = "People Who Have Subscribed a Term Deposit by Months")+
+theme(axis.text.x=element_text(angle=45,hjust=0.5,vjust=0.5))
+```
+
+
+In winter, call counts look like they're dropping. But when we look at their subscription rate, winter seems more profitable, therefore it's advised to the bank to call more possible customers in winter.
+
+## Y.a) Missing Data Imputation
+
+There were so many NA values in our dataset. So, we have to use an imputation method to complete these values.
+
+```{r imputation,message=FALSE}
+missing_columns <- subset(data,select = c(default,education,loan,housing,job,marital))
+
+missignes_plot <-aggr(missing_columns, col=c('lightblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(missing_columns), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern")) 
+
+impute <- mice(missing_columns,maxit = 0)
+
+meth <- impute$method
+
+meth[c("default")] <- "logreg"
+meth[c("loan")] <- "logreg"
+meth[c("housing")] <- "logreg"
+meth[c("education")] <- "polyreg"
+meth[c("job")] <- "polyreg"
+meth[c("marital")] <- "polyreg"
+
+set.seed(42)
+imputed <-  mice(missing_columns,method = meth,m=5)
+
+imputed <- complete(imputed)
+
+kable(t(summary(imputed)), "simple")
+
+imputed_data <- data
+sapply(imputed,function(x) sum(is.na(x)))
+
+imputed_data$education <- imputed$education
+imputed_data$default <- imputed$default
+imputed_data$marital <- imputed$marital
+imputed_data$loan <- imputed$loan
+imputed_data$housing <- imputed$housing
+imputed_data$job <- imputed$job
+```
+
+
+
+As you can see in the "Histogram of missing data" plot, the variable that has NA values the most is "default". We used "logreg" method for our binomial variables and "polyreg" method for our multinomial variables. It's clear that there are no NA values left in the dataset when we check the output of "sapply" function.
+
+
+## One Hot Encoding
+
+Most of our variables are categorical. So, we have to use "One Hot Encoding" to use the dataset in a machine learning algorithm.
+
+```{r one_hot_encoding_imputed_data}
+
+cat_data <- subset(imputed_data,select=c(job,marital,education,default,housing,loan,contact,month,day_of_week,poutcome))
+dummies_model <- dummyVars(~.,cat_data)
+trainData_mat <- predict(dummies_model, newdata = cat_data)
+
+non_cat_data <- subset(imputed_data,select=-c(job,marital,education,default,housing,loan,contact,month,day_of_week,poutcome))
+
+ohe_imputed_data <- cbind(trainData_mat,non_cat_data)
+```
+
+
+```{r one_hot_encoding_missing_data}
+
+
+data <- na.omit(data)
+
+cat_data <- subset(data,select=c(job,marital,education,default,housing,loan,contact,month,day_of_week,poutcome))
+dummies_model <- dummyVars(~.,cat_data)
+trainData_mat <- predict(dummies_model, newdata = cat_data)
+
+non_cat_data <- subset(data,select=-c(job,marital,education,default,housing,loan,contact,month,day_of_week,poutcome))
+
+ohe_missing_data <- cbind(trainData_mat,non_cat_data)
+```
+
+
+## Z.a) Dealing with Imbalanced Dataset
+
+Since our dataset is imbalanced, we need to balance it in order to increase the accuracy of the predictions, that are the outcomes of the machine learning algorithms we will be using. We chose "Random Over Sampling" for this step and increased the number of positive observations.
+
+```{r balancing_imputed_data, figures-side, fig.show="hold", out.width="50%"}
+
+n_legit <- 36548
+new_frac_legit <- 0.50
+new_n_total <- n_legit/new_frac_legit
+
+job_blue <- subset(ohe_imputed_data,select = `job.blue-collar`)
+names(ohe_imputed_data)[names(ohe_imputed_data)=="job.blue-collar"] <- "job_blue"
+names(ohe_imputed_data)[names(ohe_imputed_data)=="job.self-employed"] <- "job_self"
+
+oversampling_result <- ovun.sample(term_deposit ~ .,
+                                   data = ohe_imputed_data,
+                                   method = "over",
+                                   N = new_n_total,
+                                   seed = 42)
+
+imputed_balanced_data <- oversampling_result$data
+
+table(imputed_balanced_data$term_deposit)
+```
+
+
+
+As you can see above, both negative and positive classes for variable "term_deposit" are equally distributed.
+\n
+We will also go over these steps for dataset with missing values as well.
+
+
+```{r balancing_missing_data}
+
+
+n_legit <- 26629
+new_frac_legit <- 0.50
+new_n_total <- n_legit/new_frac_legit
+
+
+job_blue <- subset(ohe_missing_data,select = `job.blue-collar`)
+names(ohe_missing_data)[names(ohe_missing_data)=="job.blue-collar"] <- "job_blue"
+names(ohe_missing_data)[names(ohe_missing_data)=="job.self-employed"] <- "job_self"
+nrow(ohe_missing_data)
+oversampling_result <- ovun.sample(term_deposit ~ .,
+                                   data = ohe_missing_data,
+                                   method = "over",
+                                   N = new_n_total,
+                                   seed = 42)
+
+balanced_data <- oversampling_result$data
+
+table(balanced_data$term_deposit)
+```
+
+
+
+
+## 4) Multicollinearity Check
+
+Now, let's check the correlation matrix to see if there are any multicollinearated variables.
+
+```{r multicollinearity, results='hide'}
+
+correlations <- cor(imputed_balanced_data[1:57])
+
+
+corrplot(correlations, is.corr = FALSE, method = 'color', col.lim = c(-1, 1),
+          cl.pos = 'b',tl.cex=0.35,tl.col = "black")
+
+```
+We can see that there are so many multicollinearated variables. We need to use "PCA" (Principle Component Analysis) to reduce this. Using PCA will also be the solution for another problem, which is having so many (58) columns after "One Hot Encoding" step. 
+
+## 5) Principle Component Analysis (PCA)
+
+```{r imputed_data_pca}
+
+imputed_pca_data <- prcomp(ohe_imputed_data[1:57],center = TRUE, scale = TRUE)
+summary(imputed_pca_data)
+
+
+screeplot(imputed_pca_data, type = "lines", npcs = 50, main = "Scree plot of the first 15 PCs")
+abline(h = 1, col="red", lty=5)
+abline(v=29,col="blue",lty=4)
+legend("topright", legend=c("Eigenvalue = 1","The last PC that have greater than eigen value=1"),
+       col=c("red","blue"), lty=5, cex=0.6)
+
+
+cumpro <- cumsum(imputed_pca_data$sdev^2 / sum(imputed_pca_data$sdev^2))
+plot(cumpro[0:50], xlab = "PC #", ylab = "Amount of explained variance", main = "Cumulative variance plot")
+abline(v = 29, col="red", lty=5)
+abline(h = 0.827, col="red", lty=5)
+legend("topleft", legend=c("Cut-off @ PC29"),
+       col=c("red"), lty=5, cex=0.6)
+
+imputed_pca_data <- data.frame(term_deposit=ohe_imputed_data$term_deposit,imputed_pca_data$x[,1:29])
+
+```
+
+When we look at the summary of pca, we can say that using the first 29 principle components (PC's) is enough for us to reduce the dimensionality and represent most of the dataset as well, which is 82,934%. We decide that by using the components' "Eigen Values". We can either look at these values in the summary, or we can use visualization techniques (scree plot, cumulative variance plot).
+\n
+We will also go over these steps for:\n
+-A balanced dataset with missing values omitted.\n
+-A balanced dataset with imputed values.
+
+```{r balanced_data_pca}
+
+balanced_pca_data_pca <- prcomp(balanced_data[1:57],center = TRUE, scale = TRUE)
+summary(balanced_pca_data_pca)
+
+
+screeplot(balanced_pca_data_pca, type = "lines", npcs = 50, main = "Screeplot of the first 15 PCs")
+abline(h = 1, col="red", lty=5)
+abline(v=29,col="blue",lty=4)
+legend("topright", legend=c("Eigenvalue = 1","The last PC that have greater than eigen value=1"),
+       col=c("red","blue"), lty=5, cex=0.6)
+
+
+cumpro <- cumsum(balanced_pca_data_pca$sdev^2 / sum(balanced_pca_data_pca$sdev^2))
+plot(cumpro[0:50], xlab = "PC #", ylab = "Amount of explained variance", main = "Cumulative variance plot")
+abline(v = 29, col="red", lty=5)
+abline(h = 0.826, col="red", lty=5)
+legend("topleft", legend=c("Cut-off @ PC29"),
+       col=c("red"), lty=5, cex=0.6)
+
+balanced_pca_data <- data.frame(term_deposit=balanced_data$term_deposit,balanced_pca_data_pca$x[,1:29])
+```
+
+
+
+```{r imputed_balanced_data_pca}
+
+perfect_data_pca <- prcomp(imputed_balanced_data[1:57],center = TRUE, scale = TRUE)
+summary(perfect_data_pca)
+
+
+screeplot(perfect_data_pca, type = "lines", npcs = 50, main = "Screeplot of the first 15 PCs")
+abline(h = 1, col="red", lty=5)
+abline(v=29,col="blue",lty=4)
+legend("topright", legend=c("Eigenvalue = 1","The last PC that have greater than eigen value=1"),
+       col=c("red","blue"), lty=5, cex=0.6)
+
+
+cumpro <- cumsum(perfect_data_pca$sdev^2 / sum(perfect_data_pca$sdev^2))
+plot(cumpro[0:50], xlab = "PC #", ylab = "Amount of explained variance", main = "Cumulative variance plot")
+abline(v = 29, col="red", lty=5)
+abline(h = 0.826, col="red", lty=5)
+legend("topleft", legend=c("Cut-off @ PC29"),
+       col=c("red"), lty=5, cex=0.6)
+
+perfect_data <- data.frame(term_deposit=imputed_balanced_data$term_deposit,perfect_data_pca$x[,1:29])
+```
+
+
+
+
+## 6) Logistic Regression
+
+Our independent column is "term_deposit". We will try to predict this variable with a high accuracy by using logistic regression on 2 datasets. One of these datasets won't have the rows that include NA values, other dataset will have these rows as their values imputed. After predicting, we will compare the results.
+
+```{r logistic_regression_missing_data, figures-side, fig.show="hold", out.width="50%"}
+
+set.seed(42)
+
+partial_data <- createDataPartition(y=balanced_pca_data$term_deposit,p=0.8,list = FALSE)
+
+train_data <- data[partial_data,]
+test_data <- data[-partial_data,]
+
+model <- glm(term_deposit~.,data = train_data,family = "binomial")
+
+prob <- predict(model , newdata = test_data)
+pred <- ifelse(prob>0.5 , 1,0)
+
+confusionMatrix(test_data$term_deposit,as.factor(pred))
+
+real_value <- as.factor(pred)
+predicted_value <- test_data$term_deposit
+
+pred_vs_real <- as.data.frame(cbind(predicted_value,real_value))
+real_value_vs_predicted_value <- as.data.frame(table(predicted_value,real_value))
+real_value_vs_predicted_value$value_name <- c("True Negative", "False Positive", "False Negative", "True Positive")
+
+ggplot(real_value_vs_predicted_value, aes(x=value_name, y=Freq, fill=value_name)) +
+  geom_bar(stat="identity")+ theme(legend.position="none")+
+  labs(
+    x = "Predicted Values",
+    y = "Counts",
+    title = "Predicted Value Statistics")
+
+
+
+set.seed(42)
+
+partial_data <- createDataPartition(y=perfect_data$term_deposit,p=0.8,list = FALSE)
+
+train_data <- data[partial_data,]
+test_data <- data[-partial_data,]
+
+model <- glm(term_deposit~.,data = train_data,family = "binomial")
+
+prob <- predict(model , newdata = test_data)
+pred <- ifelse(prob>0.5 , 1,0)
+
+confusionMatrix(test_data$term_deposit,as.factor(pred))
+
+real_value <- as.factor(pred)
+predicted_value <- test_data$term_deposit
+
+pred_vs_real <- as.data.frame(cbind(predicted_value,real_value))
+real_value_vs_predicted_value <- as.data.frame(table(predicted_value,real_value))
+real_value_vs_predicted_value$value_name <- c("True Negative", "False Positive", "False Negative", "True Positive")
+
+ggplot(real_value_vs_predicted_value, aes(x=value_name, y=Freq, fill=value_name)) +
+  geom_bar(stat="identity")+ theme(legend.position="none")+
+  labs(
+    x = "Predicted Values",
+    y = "Counts",
+    title = "Predicted Value Statistics")
+
+```
+When we look at the confusion matrices, we can say that all of the scores ("accuracy", "sensitivity", "specificity", "positive prediction value", "negative prediction value") have gone up a little when we used imputed dataset as the input of logistic regression algorithm.
+\n
+\n
+
+## 7) Clustering Algorithms
+### 7.1)
+
+We will try to seperate the dataset into clusters. We also know that there should be 2 clusters, so we will try to find the best algorithm that seperates these 2 clusters in the most accurate way.
+
+```{r clustering_one_pca}
+
+model_kmeans_pca <- kmeans(perfect_data,centers = 2,nstart = 20)
+
+
+fviz_cluster(model_kmeans_pca, perfect_data[,2:30],  palette = c("red", "green"),
+             geom = "point",
+             ellipse.type = "convex")
+
+```
+
+```{r clustering_one_pca_plots, figures-side, fig.show="hold", out.width="50%"}
+fviz_nbclust(perfect_data[0:6000,], kmeans,nstart = 25, method = "wss") +
+  geom_vline(xintercept = 3, linetype = 2,col="red") + 
+  labs(subtitle = "Elbow method") 
+
+fviz_nbclust(perfect_data[0:6000,], kmeans, method = "silhouette") +
+  labs(subtitle = "Silhouette method")
+
+
+BSS <- model_kmeans_pca$betweenss
+TSS <- model_kmeans_pca$totss
+BSS/TSS * 100
+
+table(perfect_data$term_deposit,model_kmeans_pca$cluster)
+```
+
+
+
+When we use the dataset that was created by using pca as well, the clusters aren't too accurate, since there are too many columns in this dataset(which leads to not being able to represent the whole dataset succesfully). Elbow method suggests separating the dataset into 3 clusters, but silhouette method suggests separating the dataset into 8 clusters, which are not the exact output we would like to acquire.
+\n
+
+Now, we will try the same process with the dataset that wasn't created by using pca.
+
+```{r clustering_one_non_pca}
+
+model_kmeans_non_pca <- kmeans(imputed_balanced_data,centers = 2,nstart = 20)
+
+
+fviz_cluster(model_kmeans_non_pca, imputed_balanced_data[1:57],  palette = c("red", "green"),
+             geom = "point",
+             ellipse.type = "convex")
+
+
+
+```
+
+```{r clustering_one_non_pca_plots, figures-side, fig.show="hold", out.width="50%"}
+
+fviz_nbclust(imputed_balanced_data[0:6000,], kmeans, method = "wss") +
+  geom_vline(xintercept = 3, linetype = 2,col="red") + 
+  labs(subtitle = "Elbow method") 
+
+fviz_nbclust(imputed_balanced_data[0:6000,], kmeans, method = "silhouette") +
+  labs(subtitle = "Silhouette method")
+
+#BSS-TSS
+
+BSS <- model_kmeans_non_pca$betweenss
+TSS <- model_kmeans_non_pca$totss
+BSS/TSS * 100
+
+table(imputed_balanced_data$term_deposit,model_kmeans_non_pca$cluster)
+```
+
+
+When we use the dataset that wasn't created by using pca, the clusters are much more accurate, since there are less columns in this dataset(which leads to being able to represent the whole dataset more succesfully). Elbow method suggests separating the dataset into 3 clusters, but silhouette method suggests separating the dataset into 2 clusters. The number of the silhouette method suggests for separating is the exact output we would like to acquire.
+\n
+\n
+The ratio "Between Sum of Squares" over "Total Sum of Squares" is much higher when we use the dataset without PCA.
+\n
+\n
+\n
+### 7.2)
+
+We will now try our second clustering algorithm on both datasets.
+
+```{r clustering_two_pca}
+sample_perfect_data <- perfect_data[sample(nrow(perfect_data),20000,replace = FALSE),]
+distance <- dist(sample_perfect_data,method = "euclidian")
+model_hc_pca <- hclust(distance,method = "average")
+
+plot(model_hc_pca)
+rect.hclust(model_hc_pca, k=2, border="red")
+hier_cut <- cutree(model_hc_pca,2)
+
+
+table(predicted = hier_cut,true=sample_perfect_data$term_deposit)
+
+```
+
+```{r clustering_two_non_pca}
+sample_imputed_balanced_data <- imputed_balanced_data[sample(nrow(imputed_balanced_data),20000,replace = FALSE),]
+
+distance <- dist(sample_imputed_balanced_data,method = "euclidian")
+
+model_hc <- hclust(distance,method = "average")
+hier_cut <- cutree(model_hc_pca,2)
+plot(model_hc)
+rect.hclust(model_hc, k=2, border="red")
+
+table(predicted=hier_cut,true=sample_imputed_balanced_data$term_deposit)
+
+```
+
+The output dendrograms are really complicated, but it's obvious that best separation option is 2 clusters.
+\n
+\n
+
+Since we know that using 2 clusters is the correct answer, we will choose kMeans clustering without pca. Also, we have a large number of variables and few number of clusters. Therefore, it's better to use kMeans clustering in that sense as well.
+\n
+\n
+\n
+
+## 8) Classification Algorithms
+### 8.1)
+
+Our independent column is "term_deposit". We will try to predict this variable with a high accuracy by using "decision trees" and "kNN" algorithms on 2 datasets. One of these datasets will be balanced, other dataset will be imbalanced. After predicting, we will compare the results.
+
+```{r classification_one_balanced}
+train_control <- trainControl(method = "repeatedcv",number = 10,repeats = 3)
+
+partial_data <- createDataPartition(y=perfect_data$term_deposit,p=0.8,list = FALSE)
+train_data <- perfect_data[partial_data,]
+test_data <- perfect_data[-partial_data,]
+
+set.seed(42)
+
+decision_tree <- train(term_deposit~.,data = train_data,method="rpart", parms = list(split = "information"),
+                       trControl=train_control,
+                       tuneLength = 10)
+
+prp(decision_tree$finalModel, box.palette = "Reds", tweak = 1)
+
+pred <- predict(decision_tree,newdata = test_data)
+confusionMatrix(as.factor(pred),test_data$term_deposit)
+```
+
+When we used balanced data as an input of decision tree, it gives us 10 predictors. It's accuracy is 78,44%, also other scores are more or less the same.
+
+```{r classification_one_imbalanced}
+train_control <- trainControl(method = "repeatedcv",number = 10,repeats = 3)
+
+partial_data <- createDataPartition(y=imputed_pca_data$term_deposit,p=0.8,list = FALSE)
+train_data <- imputed_pca_data[partial_data,]
+test_data <- imputed_pca_data[-partial_data,]
+
+
+set.seed(42)
+
+decision_tree <- train(term_deposit~.,data = train_data,method="rpart", parms = list(split = "information"),
+                       trControl=train_control,
+                       tuneLength = 10)
+
+prp(decision_tree$finalModel, box.palette = "Reds", tweak = 1)
+
+pred <- predict(decision_tree,newdata = test_data)
+confusionMatrix(as.factor(pred),test_data$term_deposit)
+```
+
+When we used imbalanced data as an input of decision tree, it gives us 17 predictors. It's accuracy is 89,87%, which is much higher than the accuracy we achieved when we used balanced data as an input of decision tree. However, this doesn't mean anything, since the specificity has gone down from 82% to 36%. That means there is an underfitting situation happening here. Therefore this model can't be used and we have to balance the data.
+\n
+\n
+
+We will now try our second classification algorithm on both datasets.
+\n
+```{r classification_two_imbalanced}
+
+partial_data <- createDataPartition(y=imputed_pca_data$term_deposit,p=0.8,list = FALSE)
+train_data <- imputed_pca_data[partial_data,]
+test_data <- imputed_pca_data[-partial_data,]
+
+knn_imbalanced <- knn3(term_deposit~.,train_data,k=3)
+
+
+pred <- predict(knn_imbalanced,newdata = test_data,type = "class")
+confusionMatrix(as.factor(pred),test_data$term_deposit)
+```
+
+\n
+When we used imbalanced data as an input of kNN with k=3, our accuracy is 89,3%. However, specificity is too low for us to be able to use this model, because of underfitting.
+\n
+
+
+```{r classification_two_balanced}
+
+partial_data <- createDataPartition(y=perfect_data$term_deposit,p=0.8,list = FALSE)
+train_data <- perfect_data[partial_data,]
+test_data <- perfect_data[-partial_data,]
+
+knn_balanced <- knn3(term_deposit~.,train_data,k=3)
+
+
+pred <- predict(knn_balanced,newdata = test_data,type = "class")
+confusionMatrix(as.factor(pred),test_data$term_deposit)
+```
+
+\n
+When we used balanced data as an input of kNN with k=3, our accuracy is 91,8%. Furthermore, other scores ("sensitivity", "specificity", "positive prediction value", "negative prediction value") are also much more higher than the accuracy we achieved when we used imbalanced data as an input of kNN with k=3.
+\n
+\n
+
+When we look at their performance scores, balanced dataset gives us a much higher scores when compared to imbalanced dataset in both algorithms. Overall, if we compare algorithms with each other both in terms of speed and score, we can say that using balanced dataset with kNN algorithm is the best option for us. 
+
+\n\n
